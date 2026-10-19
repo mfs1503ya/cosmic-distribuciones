@@ -95,7 +95,8 @@ details.hgroup[open]>summary{border-bottom:1px solid var(--line);margin-bottom:2
     <div class="ctl">
       <button id="undo" title="Deshacer (Ctrl+Z)">Deshacer</button>
       <button id="labels" class="on" aria-pressed="true">Referencias</button>
-      <button id="snap" class="on" aria-pressed="true" title="Alinear con otras piezas, la repisa y el suelo">Imán</button>
+      <button id="snap" class="on" aria-pressed="true" title="Alinear con otras piezas, las guías, la repisa y el suelo">Imán</button>
+      <button id="guides" title="Mostrar, añadir o quitar guías">Guías</button>
       <button id="reset">Volver a la propuesta</button>
       <button id="code">Código</button>
       <button id="save" class="primary">Guardar imagen</button>
@@ -139,6 +140,14 @@ function clone(o){return JSON.parse(JSON.stringify(o))}
 function fmt(m,d){return (m*100).toFixed(d==null?0:d).replace('.',',')}
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.appendChild(d);setTimeout(()=>d.remove(),2200)}
 
+// ---------- guides: fractions of the image frame (0 = left/top, 1 = right/bottom), shared by every collection
+const GDEF={on:true,v:[0.2,0.4,0.6,0.8],h:[0.2,0.4,0.6,0.8],exp:false};
+let G=(()=>{try{const g=JSON.parse(lsGet(LS+'guides')||'null');if(g&&Array.isArray(g.v)&&Array.isArray(g.h))return Object.assign(clone(GDEF),g)}catch(e){}return clone(GDEF)})();
+function saveG(){lsSet(LS+'guides',JSON.stringify(G))}
+let selG=null; // {k:'v'|'h', i}
+function gX(fr){const f=state.frame;return f.left+fr*(f.right-f.left)}
+function gZ(fr){const f=state.frame;return f.top-fr*(f.top-f.bot)}
+function pct(fr){return (fr*100).toFixed(1).replace('.',',').replace(',0','')+' %'}
 let META={};
 function SK(id){const it=state.items[id];return (it&&it.sku)||id}
 function MT(id){return META[SK(id)]}
@@ -217,9 +226,28 @@ function render(){
   el('rect',{x:f.left,y:-f.top,width:W,height:f.top-f.bot,fill:'none',stroke:'#fff','stroke-width':W*0.0012,'pointer-events':'none'},svg);
   const tt=el('text',{x:f.left+W*0.01,y:-f.top+W*0.022,'font-family':'Figtree, sans-serif','font-size':W*0.013,'font-weight':700,fill:'#3a352e','pointer-events':'none','letter-spacing':W*0.0008},svg);
   tt.textContent='COSMIC · '+state.coll.toUpperCase();
+  if(G.on)drawUserGuides(svg,f,W);
   guidesG=el('g',{'pointer-events':'none'},svg);
 }
 let guidesG=null;
+function drawUserGuides(parent,f,W){
+  const H=f.top-f.bot, gg=el('g',{},parent), hs=W*0.016, lw=W*0.0009;
+  const col='#1c7fa6', cs='#c2462c';
+  G.v.forEach((fr,i)=>{const x=gX(fr), on=selG&&selG.k==='v'&&selG.i===i, c=on?cs:col;
+    el('line',{x1:x,y1:-f.top,x2:x,y2:-f.bot,stroke:c,'stroke-width':on?lw*1.6:lw,opacity:0.9,'pointer-events':'none'},gg);
+    const h=el('g',{'data-guide':'v'+i,style:'cursor:ew-resize'},gg);
+    el('rect',{x:x-hs*0.9,y:-f.top-hs*2.1,width:hs*1.8,height:hs*2.1,fill:'transparent'},h);
+    el('path',{d:`M${x-hs*0.55},${-f.top-hs*1.5}H${x+hs*0.55}V${-f.top-hs*0.55}L${x},${-f.top}L${x-hs*0.55},${-f.top-hs*0.55}Z`,fill:c},h);
+    if(on){const t=el('text',{x:x+hs*0.8,y:-f.top-hs*0.7,'font-family':'Figtree, sans-serif','font-size':W*0.009,'font-weight':700,fill:'#fff','pointer-events':'none'},gg);t.textContent=pct(fr)}
+  });
+  G.h.forEach((fr,i)=>{const zz=gZ(fr), on=selG&&selG.k==='h'&&selG.i===i, c=on?cs:col;
+    el('line',{x1:f.left,y1:-zz,x2:f.right,y2:-zz,stroke:c,'stroke-width':on?lw*1.6:lw,opacity:0.9,'pointer-events':'none'},gg);
+    const h=el('g',{'data-guide':'h'+i,style:'cursor:ns-resize'},gg);
+    el('rect',{x:f.left-hs*2.1,y:-zz-hs*0.9,width:hs*2.1,height:hs*1.8,fill:'transparent'},h);
+    el('path',{d:`M${f.left-hs*1.5},${-zz-hs*0.55}V${-zz+hs*0.55}H${f.left-hs*0.55}L${f.left},${-zz}L${f.left-hs*0.55},${-zz-hs*0.55}Z`,fill:c},h);
+    if(on){const t=el('text',{x:f.left-hs*1.6,y:-zz-hs*0.8,'text-anchor':'end','font-family':'Figtree, sans-serif','font-size':W*0.009,'font-weight':700,fill:'#fff','pointer-events':'none'},gg);t.textContent=pct(fr)}
+  });
+}
 function labelLayout(W){
   // stagger reference labels that would overlap (e.g. a row of hooks): push them down one line at a time
   const fs=W*0.0052, lh=fs*1.25, cw=fs*0.64, placed=[], res={};
@@ -258,8 +286,12 @@ svg.addEventListener('pointerdown',ev=>{
   if(pts.size===2){ // pinch zoom
     const [a,b]=[...pts.values()]; pinch={d:Math.hypot(a.x-b.x,a.y-b.y),w:view.w}; drag=null; return;
   }
-  const p=toWorld(ev); const tgt=ev.target.closest('[data-sku],[data-bench],[data-handle]');
-  if(tgt&&tgt.dataset.sku){
+  const p=toWorld(ev); const tgt=ev.target.closest('[data-sku],[data-bench],[data-handle],[data-guide]');
+  if(tgt&&tgt.dataset.guide){
+    const k=tgt.dataset.guide[0], i=+tgt.dataset.guide.slice(1); selG={k,i}; sel=null;
+    drag={kind:'guide',k,i,moved:false}; render(); renderSel(); return;
+  }
+  if(tgt&&tgt.dataset.sku){ selG=null;
     const sku=tgt.dataset.sku; const it=state.items[sku];
     drag={kind:'item',sku,ox:p.x-it.x,oz:p.z-it.z,moved:false,start:JSON.stringify(state)};
     if(sel!==sku){sel=sku;render();renderSel();}
@@ -280,6 +312,9 @@ svg.addEventListener('pointermove',ev=>{
   if(drag.kind==='item'){
     const it=state.items[drag.sku]; let x=p.x-drag.ox, z=p.z-drag.oz;
     const g=snapOn?snapItem(drag.sku,x,z):{x,z,lines:[]}; it.x=g.x; it.z=g.z; render(); drawGuides(g.lines); renderSel();
+  }else if(drag.kind==='guide'){
+    const f=state.frame; const fr=drag.k==='v'?(p.x-f.left)/(f.right-f.left):(f.top-p.z)/(f.top-f.bot);
+    G[drag.k][drag.i]=Math.round(fr*1000)/1000; drag.px=p.x; drag.pz=p.z; render(); renderSel();
   }else if(drag.kind==='bench'){
     const dx=p.x-drag.ox; state.bench.x0=drag.b0.x0+dx; state.bench.x1=drag.b0.x1+dx; render();
   }else if(drag.kind==='handle'){
@@ -290,8 +325,14 @@ svg.addEventListener('pointermove',ev=>{
 function endPtr(ev){
   pts.delete(ev.pointerId); if(pts.size<2)pinch=null;
   if(!drag)return; svg.classList.remove('panning');
+  if(drag.kind==='guide'){const a=G[drag.k],fr=a[drag.i];
+    const f=state.frame,W=f.right-f.left;
+    const back=drag.px!=null&&(drag.k==='v'?drag.pz>f.top+W*0.045:drag.px<f.left-W*0.045); // dragged back onto its margin
+    if(drag.moved&&(fr<-0.005||fr>1.005||back)){a.splice(drag.i,1);selG=null;toast('Guía eliminada')}
+    else a[drag.i]=Math.min(1,Math.max(0,fr));
+    saveG();drag=null;render();renderSel();return}
   if(drag.kind!=='pan'&&drag.moved){hist.push(drag.start);if(hist.length>80)hist.shift();$('undo').disabled=false;persist();}
-  if(drag.kind==='pan'&&!drag.moved&&sel){sel=null;render();renderSel();}
+  if(drag.kind==='pan'&&!drag.moved&&(sel||selG)){sel=null;selG=null;render();renderSel();}
   drag=null; if(guidesG)guidesG.textContent='';
 }
 svg.addEventListener('pointerup',endPtr); svg.addEventListener('pointercancel',endPtr);
@@ -299,16 +340,18 @@ svg.addEventListener('wheel',ev=>{ev.preventDefault();const p=toWorld(ev);zoom(M
 
 function snapItem(sku,x,z){
   const t=dimsOf(sku), W=state.frame.right-state.frame.left, tol=W*0.006; const lines=[]; const B=state.bench;
-  let bx=null,bz=null,dxb=tol,dzb=tol;
-  // bottoms: floor, bench top
-  const zs=[[0,'floor']]; if(x>B.x0&&x<B.x1)zs.push([B.h,'bench']);
+  let bx=null,bz=null,lx=null,lz=null,dxb=tol,dzb=tol;
+  // x candidates [piece centre x, line x]; z candidates [piece base z, line z]
+  const xs=[]; const zs=[[0,0]]; if(x>B.x0&&x<B.x1)zs.push([B.h,B.h]);
   for(const k of state.order){if(k===sku)continue;const o=state.items[k];if(o.out)continue;const ot=dimsOf(k);
-    zs.push([o.z,'b']); zs.push([o.z+ot.h/2-t.h/2,'c']);
-    const cx=o.x; if(Math.abs(cx-x)<dxb){dxb=Math.abs(cx-x);bx=cx}
+    zs.push([o.z,o.z]); zs.push([o.z+ot.h/2-t.h/2,o.z+ot.h/2]); xs.push([o.x,o.x]);
   }
-  for(const [zz] of zs){if(Math.abs(zz-z)<dzb){dzb=Math.abs(zz-z);bz=zz}}
-  if(bx!=null){x=bx;lines.push({x1:bx,y1:-50,x2:bx,y2:50})}
-  if(bz!=null){z=bz;lines.push({x1:-50,y1:-bz,x2:50,y2:-bz})}
+  if(G.on){for(const fr of G.v){const gx=gX(fr);xs.push([gx,gx],[gx+t.w/2,gx],[gx-t.w/2,gx])}
+    for(const fr of G.h){const gz=gZ(fr);zs.push([gz,gz],[gz-t.h/2,gz],[gz-t.h,gz])}}
+  for(const [cx,ln] of xs){if(Math.abs(cx-x)<dxb){dxb=Math.abs(cx-x);bx=cx;lx=ln}}
+  for(const [zz,ln] of zs){if(Math.abs(zz-z)<dzb){dzb=Math.abs(zz-z);bz=zz;lz=ln}}
+  if(bx!=null){x=bx;lines.push({x1:lx,y1:-50,x2:lx,y2:50})}
+  if(bz!=null){z=bz;lines.push({x1:-50,y1:-lz,x2:50,y2:-lz})}
   return {x,z,lines};
 }
 function drawGuides(lines){if(!guidesG)return;guidesG.textContent='';const W=state.frame.right-state.frame.left;for(const l of lines)el('line',Object.assign({stroke:'#c2462c','stroke-width':W*0.0007,'stroke-dasharray':(W*0.003)+' '+(W*0.002)},l),guidesG)}
@@ -316,7 +359,14 @@ function drawGuides(lines){if(!guidesG)return;guidesG.textContent='';const W=sta
 // ---------- selected piece strip
 function renderSel(){
   const b=$('selbar'); b.textContent='';
-  if(!sel){const s=document.createElement('span');s.className='muted';s.textContent='Toca una pieza para ver su referencia, medidas y altura desde el suelo.';b.appendChild(s);return}
+  if(selG&&G[selG.k][selG.i]!=null){const {k,i}=selG;const a=document.createElement('span');a.className='sel-ref';a.textContent=(k==='v'?'Guía vertical ':'Guía horizontal ')+(i+1);
+    const m=document.createElement('span');m.className='sel-meta';m.textContent=k==='v'?'a este % del ancho de la imagen, desde la izquierda':'a este % del alto de la imagen, desde arriba';
+    const inp=document.createElement('input');inp.type='number';inp.min=0;inp.max=100;inp.step=0.5;inp.value=+(G[k][i]*100).toFixed(1);inp.setAttribute('aria-label','Posición de la guía en %');
+    inp.addEventListener('change',()=>{G[k][i]=Math.min(1,Math.max(0,(+inp.value||0)/100));saveG();render()});
+    const pc=document.createElement('span');pc.className='muted';pc.textContent='%';
+    const sp=document.createElement('span');sp.className='grow';
+    b.append(a,inp,pc,m,sp,btn('Eliminar guía',()=>{G[k].splice(i,1);selG=null;saveG();render();renderSel()}),btn('Listo',()=>{selG=null;render();renderSel()}));return}
+  if(!sel){const s=document.createElement('span');s.className='muted';s.textContent='Toca una pieza para ver su referencia, medidas y altura desde el suelo. Toca el triángulo azul de una guía para moverla o eliminarla.';b.appendChild(s);return}
   const meta=MT(sel), it=state.items[sel], t=dimsOf(sel), sku=SK(sel);
   const a=document.createElement('span');a.className='sel-ref';a.textContent=sku;
   const m=document.createElement('span');m.className='sel-meta';
@@ -407,6 +457,7 @@ window.addEventListener('resize',applyView);
 document.addEventListener('keydown',e=>{
   if(e.target.closest('input,textarea,select'))return;
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo();return}
+  if(selG&&(e.key==='Delete'||e.key==='Backspace')){G[selG.k].splice(selG.i,1);selG=null;saveG();render();renderSel();return}
   if(!sel)return; const st=e.shiftKey?0.05:0.01; const it=state.items[sel];
   const mv={ArrowLeft:[-st,0],ArrowRight:[st,0],ArrowUp:[0,st],ArrowDown:[0,-st]}[e.key];
   if(mv){e.preventDefault();push();it.x+=mv[0];it.z+=mv[1];render();renderSel();persist()}
@@ -415,6 +466,33 @@ document.addEventListener('keydown',e=>{
 const sc=$('coll'); for(const n of COLL_ORDER){const o=document.createElement('option');o.value=n;o.textContent=n;sc.appendChild(o)}
 sc.addEventListener('change',e=>{lsSet(LS+'last',e.target.value);drawerQ='';$('dsearch').value='';load(e.target.value)});
 $('dsearch').addEventListener('input',e=>{drawerQ=e.target.value;renderDrawer()});
+
+// ---------- guides dialog
+function syncGuideBtn(){const b=$('guides');b.classList.toggle('on',G.on);b.setAttribute('aria-pressed',G.on)}
+$('guides').addEventListener('click',()=>overlay((d,close)=>{
+  const h=document.createElement('h2');h.textContent='Guías';
+  const p=document.createElement('p');p.className='muted';p.style.margin='0';
+  p.textContent='Las guías son las mismas en todas las colecciones y en todos los formatos: se miden en % de la imagen. En la escena, arrastra el triángulo azul para moverlas; devuélvelo a su margen (o sácalo de la imagen) para eliminarla. Con el Imán activo, las piezas se alinean a las guías.';
+  const body=document.createElement('div');body.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px';
+  const col=(k,title,hint)=>{const c=document.createElement('div');c.style.cssText='display:flex;flex-direction:column;gap:6px';
+    const t=document.createElement('strong');t.textContent=title+' ('+G[k].length+')';const hh=document.createElement('span');hh.className='muted';hh.style.fontSize='12px';hh.textContent=hint;c.append(t,hh);
+    G[k].forEach((fr,i)=>{const r=document.createElement('div');r.className='row';const l=document.createElement('span');l.textContent=(i+1)+'.';l.style.minWidth='20px';
+      const inp=document.createElement('input');inp.type='number';inp.min=0;inp.max=100;inp.step=0.5;inp.value=+(fr*100).toFixed(1);inp.setAttribute('aria-label',title+' '+(i+1)+' en %');
+      inp.addEventListener('change',()=>{G[k][i]=Math.min(1,Math.max(0,(+inp.value||0)/100));saveG();render()});
+      const pc=document.createElement('span');pc.className='muted';pc.textContent='%';
+      r.append(l,inp,pc,btn('Quitar',()=>{G[k].splice(i,1);selG=null;saveG();render();renderSel();close();$('guides').click()}));c.appendChild(r)});
+    c.appendChild(btn('+ Añadir '+(k==='v'?'vertical':'horizontal'),()=>{G[k].push(0.5);G.on=true;saveG();syncGuideBtn();render();close();$('guides').click()}));
+    return c};
+  body.append(col('v','Verticales','% desde la izquierda'),col('h','Horizontales','% desde arriba'));
+  const opts=document.createElement('div');opts.className='row';
+  const ck=(label,key)=>{const l=document.createElement('label');l.style.cssText='display:flex;gap:6px;align-items:center;cursor:pointer';const c=document.createElement('input');c.type='checkbox';c.checked=!!G[key];
+    c.addEventListener('change',()=>{G[key]=c.checked;saveG();syncGuideBtn();render()});l.append(c,document.createTextNode(label));return l};
+  opts.append(ck('Mostrar guías','on'),ck('Incluir las guías en la imagen guardada','exp'));
+  const r=document.createElement('div');r.className='row';
+  r.append(btn('Restablecer 4 + 4',()=>{G.v=GDEF.v.slice();G.h=GDEF.h.slice();G.on=true;selG=null;saveG();syncGuideBtn();render();renderSel();close();$('guides').click()}),
+    btn('Quitar todas',()=>{G.v=[];G.h=[];selG=null;saveG();render();renderSel();close();$('guides').click()}),btn('Cerrar',close,'primary'));
+  d.append(h,p,body,opts,r)}));
+syncGuideBtn();
 
 // ---------- dialogs
 function overlay(build){const o=document.createElement('div');o.className='overlay';const d=document.createElement('div');d.className='dlg';d.setAttribute('role','dialog');o.appendChild(d);build(d,()=>o.remove());o.addEventListener('click',e=>{if(e.target===o)o.remove()});document.body.appendChild(o);return o}
@@ -452,6 +530,9 @@ async function exportPNG(){
   await drawSet(m=>!(m.layer==='wall'||m.layer==='side'));
   if(labelsOn){g.fillStyle='#2d2a26';g.font=`500 ${Math.round(Wm*0.0052*s)}px "IBM Plex Mono", monospace`;g.textAlign='center';g.textBaseline='top';
     const LL=labelLayout(Wm);for(const k of state.order){const it=state.items[k];if(it.out)continue;g.fillText(SK(k),X(it.x),Y(it.z)+PW*0.002+(LL[k]||0)*s)}}
+  if(G.on&&G.exp){g.strokeStyle='rgba(28,127,166,0.85)';g.lineWidth=Math.max(2,PW*0.0008);g.setLineDash([]);
+    for(const fr of G.v){const x=fr*PW;g.beginPath();g.moveTo(x,0);g.lineTo(x,PH);g.stroke()}
+    for(const fr of G.h){const y=fr*PH;g.beginPath();g.moveTo(0,y);g.lineTo(PW,y);g.stroke()}}
   // title band: collection name, date
   const now=new Date(); const ds=now.toLocaleDateString('es-ES')+' '+now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
   g.setTransform(1,0,0,1,0,0);
