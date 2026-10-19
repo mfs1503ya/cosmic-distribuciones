@@ -34,6 +34,7 @@ svg#stage{width:100%;height:100%;display:block;cursor:grab}
 svg#stage.panning{cursor:grabbing}
 .zoombar{position:absolute;right:8px;bottom:8px;display:flex;gap:4px}
 .zoombar button{min-height:32px;padding:4px 10px;background:rgba(248,246,242,.92);color:#24262a;border-color:#cfc7ba}
+.zoombar button.on{background:#2f4a5c;color:#fff;border-color:#2f4a5c}
 .hint{position:absolute;left:10px;bottom:10px;font-size:12px;color:#3d3a35;background:rgba(248,246,242,.85);padding:4px 8px;border-radius:5px;max-width:60%}
 .bar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:52px}
 .sel-ref{font-family:var(--f-ref);font-weight:500;font-size:14px}
@@ -106,8 +107,8 @@ details.hgroup[open]>summary{border-bottom:1px solid var(--line);margin-bottom:2
   <div class="main">
   <div class="stagewrap" id="wrap">
     <svg id="stage" xmlns="http://www.w3.org/2000/svg"></svg>
-    <div class="hint" id="hint">Arrastra las piezas y la repisa. Tira de los extremos de la repisa para alargarla. Arrastra el fondo para moverte y usa + / − para acercar.</div>
-    <div class="zoombar"><button id="zin" aria-label="Acercar">+</button><button id="zout" aria-label="Alejar">−</button><button id="zfit">Ajustar</button></div>
+    <div class="hint" id="hint">Arrastra las piezas y la repisa. Tira de los extremos de la repisa para alargarla. Con «Mover encuadre» activo (o arrastrando el borde blanco) desplazas la imagen, igual en todas las colecciones. Arrastra el fondo para moverte y usa + / − para acercar.</div>
+    <div class="zoombar"><button id="fmove" aria-pressed="false" title="Activa y arrastra para desplazar el encuadre (igual en todas las colecciones)">✥ Mover encuadre</button><button id="zin" aria-label="Acercar">+</button><button id="zout" aria-label="Alejar">−</button><button id="zfit">Ajustar</button></div>
   </div>
   <aside class="drawer" aria-labelledby="drawer-h">
     <h2 id="drawer-h">Cajón de accesorios</h2>
@@ -159,11 +160,18 @@ function arNum(a){const p=String(a||AR_DEF).split(':');return (+p[0]||3)/(+p[1]|
 function wrefOf(st){const f=st.frame,W=f.right-f.left,r=arNum(st.ar||'16:9');return st.wref||(r>=1?W:W/r)}
 function frameFrom(st,wr,a){const f=st.frame,r=arNum(a);const W=r>=1?wr:wr*r,H=r>=1?wr/r:wr;f.right=f.left+W;f.top=f.bot+H;st.wref=wr;st.ar=a}
 function setAR(st,a){frameFrom(st,wrefOf(st),a)}
+// ONE frame for every collection: format, width and position are shared, so the floor sits at the same height
+// and the scale is the same in all the images. Stored as {left, bot, wref, ar}.
+let FR=(()=>{try{const o=JSON.parse(lsGet(LS+'frame')||'null');if(o&&isFinite(o.left)&&isFinite(o.bot)&&o.wref>0&&o.ar)return o}catch(e){}
+  const t={frame:clone(DATA.colls[DATA.order[0]].frame)};setAR(t,AR_DEF);return {left:t.frame.left,bot:t.frame.bot,wref:t.wref,ar:t.ar}})();
+function frameFromFR(){const r=arNum(FR.ar);const W=r>=1?FR.wref:FR.wref*r,H=r>=1?FR.wref/r:FR.wref;return {left:FR.left,right:FR.left+W,bot:FR.bot,top:FR.bot+H}}
+function pullFR(st){st.frame=frameFromFR();st.ar=FR.ar;st.wref=FR.wref}
+function pushFR(st){FR={left:+st.frame.left.toFixed(4),bot:+st.frame.bot.toFixed(4),wref:wrefOf(st),ar:st.ar||AR_DEF};lsSet(LS+'frame',JSON.stringify(FR))}
 function defaults(name){
   const c=DATA.colls[name];
   const d={coll:name,bench:clone(c.bench),frame:clone(c.frame),order:c.items.map(i=>i.sku),
     items:Object.fromEntries(c.items.map(i=>[i.sku,{x:i.x,z:i.z,out:!!i.out}]))};
-  setAR(d,AR_DEF); return d;
+  pullFR(d); return d;
 }
 function load(name){
   cur=DATA.colls[name]; hist=[]; META=Object.fromEntries(cur.items.map(i=>[i.sku,i]));
@@ -172,14 +180,14 @@ function load(name){
   const d=defaults(name);
   if(s&&s.items){ // keep only pieces that still exist, add new ones
     for(const k in s.items){const v=s.items[k];const sk=v.sku||k;if(META[sk])d.items[k]=v}
-    if(s.bench)d.bench=s.bench; if(s.frame){d.frame=s.frame; d.ar=s.ar; d.wref=s.wref||0; if(!s.ar)setAR(d,AR_DEF)} // older saves were 16:9: move them to 3:2
+    if(s.bench)d.bench=s.bench; // the frame is shared: it always comes from FR // older saves were 16:9: move them to 3:2
     if(Array.isArray(s.order)){const o=s.order.filter(k=>d.items[k]);d.order=o.concat(d.order.filter(k=>!o.includes(k)))}
   }
-  state=d; sel=null; applyARUI(); fitView(); syncInputs(); render(); renderSel(); renderTray();
+  pullFR(d); state=d; sel=null; applyARUI(); fitView(); syncInputs(); render(); renderSel(); renderTray();
 }
 function persist(){lsSet(LS+state.coll,JSON.stringify(state))}
 function push(){hist.push(JSON.stringify(state)); if(hist.length>80)hist.shift(); $('undo').disabled=false}
-function undo(){if(!hist.length)return; state=JSON.parse(hist.pop()); $('undo').disabled=!hist.length; applyARUI(); syncInputs(); render(); renderSel(); renderTray(); persist()}
+function undo(){if(!hist.length)return; state=JSON.parse(hist.pop()); pushFR(state); $('undo').disabled=!hist.length; applyARUI(); syncInputs(); render(); renderSel(); renderTray(); persist()}
 
 // ---------- view (viewBox in metres; y up is -z)
 function fitView(){const f=state.frame,W=f.right-f.left,H=f.top-f.bot,m=0.04*Math.max(W,H);const r=wrap.getBoundingClientRect();const ra=r.width/Math.max(1,r.height)||1.5;
@@ -224,12 +232,15 @@ function render(){
   // frame mask: dim everything outside the image
   const m=el('path',{d:`M${-big},${-big}H${big}V${big}H${-big}Z M${f.left},${-f.top}V${-f.bot}H${f.right}V${-f.top}Z`,fill:'rgba(40,36,32,0.45)','fill-rule':'evenodd','pointer-events':'none'},svg);
   el('rect',{x:f.left,y:-f.top,width:W,height:f.top-f.bot,fill:'none',stroke:'#fff','stroke-width':W*0.0012,'pointer-events':'none'},svg);
+  // move the frame: drag its edge or the grip under its bottom-right corner
+  el('rect',{x:f.left,y:-f.top,width:W,height:f.top-f.bot,fill:'none',stroke:'transparent','stroke-width':W*0.012,'pointer-events':'stroke','data-frame':'1',style:'cursor:move'},svg);
+  if(frameMode)el('rect',{x:f.left,y:-f.top,width:W,height:f.top-f.bot,fill:'rgba(47,74,92,0.10)',stroke:'#2f4a5c','stroke-width':W*0.003,'stroke-dasharray':(W*0.01)+' '+(W*0.006),'pointer-events':'none'},svg);
   const tt=el('text',{x:f.left+W*0.01,y:-f.top+W*0.022,'font-family':'Figtree, sans-serif','font-size':W*0.013,'font-weight':700,fill:'#3a352e','pointer-events':'none','letter-spacing':W*0.0008},svg);
   tt.textContent='COSMIC · '+state.coll.toUpperCase();
   if(G.on)drawUserGuides(svg,f,W);
   guidesG=el('g',{'pointer-events':'none'},svg);
 }
-let guidesG=null;
+let guidesG=null, frameMode=false;
 function drawUserGuides(parent,f,W){
   const H=f.top-f.bot, gg=el('g',{},parent), hs=W*0.016, lw=W*0.0009;
   const col='#1c7fa6', cs='#c2462c';
@@ -287,6 +298,8 @@ svg.addEventListener('pointerdown',ev=>{
     const [a,b]=[...pts.values()]; pinch={d:Math.hypot(a.x-b.x,a.y-b.y),w:view.w}; drag=null; return;
   }
   const p=toWorld(ev); const tgt=ev.target.closest('[data-sku],[data-bench],[data-handle],[data-guide]');
+  const fr_=frameMode||ev.target.closest('[data-frame]');
+  if(fr_){drag={kind:'frame',ox:p.x,oz:p.z,f0:clone(state.frame),moved:false,start:JSON.stringify(state)};return}
   if(tgt&&tgt.dataset.guide){
     const k=tgt.dataset.guide[0], i=+tgt.dataset.guide.slice(1); selG={k,i}; sel=null;
     drag={kind:'guide',k,i,moved:false}; render(); renderSel(); return;
@@ -312,6 +325,9 @@ svg.addEventListener('pointermove',ev=>{
   if(drag.kind==='item'){
     const it=state.items[drag.sku]; let x=p.x-drag.ox, z=p.z-drag.oz;
     const g=snapOn?snapItem(drag.sku,x,z):{x,z,lines:[]}; it.x=g.x; it.z=g.z; render(); drawGuides(g.lines); renderSel();
+  }else if(drag.kind==='frame'){
+    const dx=Math.round((p.x-drag.ox)*100)/100, dz=Math.round((p.z-drag.oz)*100)/100, f=state.frame, f0=drag.f0;
+    f.left=f0.left+dx;f.right=f0.right+dx;f.bot=f0.bot+dz;f.top=f0.top+dz; render(); syncInputs();
   }else if(drag.kind==='guide'){
     const f=state.frame; const fr=drag.k==='v'?(p.x-f.left)/(f.right-f.left):(f.top-p.z)/(f.top-f.bot);
     G[drag.k][drag.i]=Math.round(fr*1000)/1000; drag.px=p.x; drag.pz=p.z; render(); renderSel();
@@ -331,6 +347,9 @@ function endPtr(ev){
     if(drag.moved&&(fr<-0.005||fr>1.005||back)){a.splice(drag.i,1);selG=null;toast('Guía eliminada')}
     else a[drag.i]=Math.min(1,Math.max(0,fr));
     saveG();drag=null;render();renderSel();return}
+  if(drag.kind==='frame'){const d=drag;drag=null;
+    if(d.moved){pushFR(state);hist.push(d.start);if(hist.length>80)hist.shift();$('undo').disabled=false;persist();fitView()}
+    render();return}
   if(drag.kind!=='pan'&&drag.moved){hist.push(drag.start);if(hist.length>80)hist.shift();$('undo').disabled=false;persist();}
   if(drag.kind==='pan'&&!drag.moved&&(sel||selG)){sel=null;selG=null;render();renderSel();}
   drag=null; if(guidesG)guidesG.textContent='';
@@ -446,12 +465,14 @@ function syncInputs(){$('btype').value=state.bench.type;$('bh').value=Math.round
 $('btype').addEventListener('change',e=>{push();const B=state.bench;B.type=e.target.value;B.t=B.type==='shelf'?0.06:(B.type==='u'?0.07:0);render();persist()});
 $('bh').addEventListener('change',e=>{const v=Math.min(120,Math.max(20,+e.target.value||45))/100;push();const dz=v-state.bench.h;state.bench.h=v;
   for(const k in state.items){const it=state.items[k];const m=MT(k);if(m&&m.layer==='counter'&&!it.out)it.z+=dz}render();persist()});
-$('fw').addEventListener('change',e=>{const v=Math.min(9,Math.max(1.5,(+e.target.value||400)/100));push();const r=arNum(state.ar);frameFrom(state,r>=1?v:v/r,state.ar||AR_DEF);fitView();render();persist()});
-$('ar').addEventListener('change',e=>{push();setAR(state,e.target.value);applyARUI();requestAnimationFrame(()=>{fitView();syncInputs();render();persist()});toast('Formato '+e.target.value)});
+$('fw').addEventListener('change',e=>{const v=Math.min(9,Math.max(1.5,(+e.target.value||400)/100));push();const r=arNum(state.ar);frameFrom(state,r>=1?v:v/r,state.ar||AR_DEF);pushFR(state);fitView();render();persist()});
+$('ar').addEventListener('change',e=>{push();setAR(state,e.target.value);pushFR(state);applyARUI();requestAnimationFrame(()=>{fitView();syncInputs();render();persist()});toast('Formato '+e.target.value)});
 $('undo').addEventListener('click',undo);
 $('labels').addEventListener('click',e=>{labelsOn=!labelsOn;e.currentTarget.classList.toggle('on',labelsOn);e.currentTarget.setAttribute('aria-pressed',labelsOn);render()});
 $('snap').addEventListener('click',e=>{snapOn=!snapOn;e.currentTarget.classList.toggle('on',snapOn);e.currentTarget.setAttribute('aria-pressed',snapOn)});
-$('reset').addEventListener('click',()=>{confirmBox('¿Volver a la distribución propuesta para '+state.coll+'? Se pierden los cambios de esta colección (puedes deshacerlo).',()=>{push();const d=defaults(state.coll);if(state.ar&&state.ar!==AR_DEF)setAR(d,state.ar);state=d;applyARUI();fitView();syncInputs();render();renderSel();renderTray();persist()})});
+$('reset').addEventListener('click',()=>{confirmBox('¿Volver a la distribución propuesta para '+state.coll+'? Se pierden los cambios de esta colección (puedes deshacerlo).',()=>{push();const d=defaults(state.coll);state=d;applyARUI();fitView();syncInputs();render();renderSel();renderTray();persist()})});
+$('fmove').addEventListener('click',e=>{frameMode=!frameMode;e.currentTarget.classList.toggle('on',frameMode);e.currentTarget.setAttribute('aria-pressed',frameMode);
+  if(frameMode){sel=null;selG=null;renderSel();toast('Arrastra en cualquier punto para mover el encuadre')} render()});
 $('zin').addEventListener('click',()=>zoom(1/1.3));$('zout').addEventListener('click',()=>zoom(1.3));$('zfit').addEventListener('click',()=>{fitView();applyView()});
 window.addEventListener('resize',applyView);
 document.addEventListener('keydown',e=>{
@@ -509,7 +530,7 @@ $('code').addEventListener('click',()=>overlay((d,close)=>{
   const r=document.createElement('div');r.className='row';
   r.append(btn('Copiar código',async()=>{try{await navigator.clipboard.writeText(ta.value);toast('Código copiado')}catch(e){ta.focus();ta.select();toast('Selecciona y copia el texto')}},'primary'),
     btn('Cargar código pegado',()=>{try{const o=decode(ta.value);if(!DATA.colls[o.c])throw 0;sc.value=o.c;load(o.c);push();
-      state.bench=o.b;state.frame=o.f;state.ar=o.a||'16:9';state.wref=o.w||0;state.wref=wrefOf(state);applyARUI();for(const k in o.i){const a=o.i[k];const sk=a[4]||k;if(!META[sk])continue;state.items[k]={x:a[0],z:a[1],out:!!a[2],rot:a[3]||0};if(a[4])state.items[k].sku=a[4]}state.order=o.o.filter(k=>state.items[k]).concat(Object.keys(state.items).filter(k=>!o.o.includes(k)));
+      state.bench=o.b;state.frame=o.f;state.ar=o.a||'16:9';state.wref=o.w||0;state.wref=wrefOf(state);pushFR(state);applyARUI();for(const k in o.i){const a=o.i[k];const sk=a[4]||k;if(!META[sk])continue;state.items[k]={x:a[0],z:a[1],out:!!a[2],rot:a[3]||0};if(a[4])state.items[k].sku=a[4]}state.order=o.o.filter(k=>state.items[k]).concat(Object.keys(state.items).filter(k=>!o.o.includes(k)));
       fitView();syncInputs();render();renderTray();persist();close();toast('Distribución cargada: '+o.c)}catch(e){toast('El código no es válido')}}),
     btn('Cerrar',close));
   d.append(h,p,ta,r)}));
